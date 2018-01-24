@@ -128,7 +128,7 @@ describe('Session', function() {
       connection.open({ protocol: 'amqp', host: 'localhost', port: server.port });
     });
 
-    it('should restart the session when ended by the broker if the policy says to', function(done) {
+    it('should reestablish the session when ended by the broker if the policy says to', function(done) {
       server = new MockServer();
       server.setSequence([
         constants.amqpVersion,
@@ -193,7 +193,7 @@ describe('Session', function() {
 
         session.begin(
           u.deepMerge({
-            restart: {
+            reestablish: {
               retries: 10,
               strategy: 'fibonacci',
               forever: true
