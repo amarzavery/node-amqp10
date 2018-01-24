@@ -3,10 +3,12 @@
   "version": "3.5.4",
   "description": "Native AMQP-1.0 client for node.js",
   "main": "./lib",
+  "types": "./typings/lib/index.d.ts",
   "engines": {
     "node": ">= 0.10"
   },
   "dependencies": {
+    "@types/node": "^9.3.0",
     "bl": "^1.1.2",
     "bluebird": "^3.4.6",
     "buffer-builder": "^0.2.0",
@@ -31,7 +33,8 @@
     "stream-buffers": "^3.0.1"
   },
   "scripts": {
-    "version": "make changelog && git add CHANGELOG.md && make docs"
+    "version": "make changelog && git add CHANGELOG.md && make docs",
+    "tsc": "tsc -p tsconfig.json"
   },
   "author": {
     "name": "noodlefrenzy",
