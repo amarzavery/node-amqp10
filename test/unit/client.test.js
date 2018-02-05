@@ -1,13 +1,16 @@
 'use strict';
 
 var _ = require('lodash'),
+    Promise = require('bluebird'),
     amqp = require('../../lib'),
     chai = require('chai'),
     expect = chai.expect,
     Builder = require('buffer-builder'),
     AMQPClient = require('../../lib').Client,
     MockServer = require('./mocks').Server,
+    MockServerWithSasl = require('./mock_amqp'),
 
+    Session = require('../../lib/session'),
     errors = require('../../lib/errors'),
     constants = require('../../lib/constants'),
     frames = require('../../lib/frames'),
@@ -82,11 +85,6 @@ describe('Client', function() {
       test.server.setResponseSequence([
         constants.amqpVersion,
         new frames.OpenFrame(test.client.policy.connect.options),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
@@ -300,18 +298,13 @@ describe('Client', function() {
       test.server.setResponseSequence([
         constants.amqpVersion,
         new frames.OpenFrame({ containerId: 'server' }),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
       ]);
 
       return test.client.connect(test.server.address())
-        .then(function() {
+        .then(function () {
           expect(test.client._connection.remote.open.idleTimeout).to.equal(constants.defaultIdleTimeout);
           return test.client.disconnect();
         });
@@ -321,11 +314,6 @@ describe('Client', function() {
       test.server.setResponseSequence([
         constants.amqpVersion,
         new frames.OpenFrame({ containerId: 'server', idleTimeout: 57 }),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
@@ -343,11 +331,6 @@ describe('Client', function() {
       test.server.setResponseSequence([
         constants.amqpVersion,
         new frames.OpenFrame({ containerId: 'server', idleTimeout: 0 }),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
@@ -365,11 +348,6 @@ describe('Client', function() {
       test.server.setResponseSequence([
         constants.amqpVersion,
         new frames.OpenFrame({ containerId: 'server', idleTimeout: 0 }),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
@@ -517,6 +495,7 @@ describe('Client', function() {
 
       return test.server.teardown()
         .then(function() { return test.client.connect(address); })
+        .then(function() { return test.client.createSession(); })
         .then(function() { return test.client.disconnect(); });
     });
 
@@ -525,20 +504,10 @@ describe('Client', function() {
         // first connect
         constants.amqpVersion,
         new frames.OpenFrame(test.client.policy.connect.options),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
 
         // second connect
         constants.amqpVersion,
         new frames.OpenFrame(test.client.policy.connect.options),
-        new frames.BeginFrame({
-          remoteChannel: 1, nextOutgoingId: 0,
-          incomingWindow: 2147483647, outgoingWindow: 2147483647,
-          handleMax: 4294967295
-        }),
         new frames.CloseFrame({
           error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
         })
@@ -556,7 +525,52 @@ describe('Client', function() {
         .delay(250) // simulate some time to reconnect
         .then(function() { return test.client.disconnect(); });
     });
+  });
 
+  describe('#createSession()', function() {
+    beforeEach(function() {
+      if (!!test.server) test.server = undefined;
+      if (!!test.client) test.client = undefined;
+      test.client = new AMQPClient(TestPolicy);
+      test.server = new MockServer();
+      return test.server.setup();
+    });
+
+    afterEach(function() {
+      if (!test.server) return;
+      return test.server.teardown()
+        .then(function() {
+          test.server = undefined;
+        });
+    });
+
+    it('should create a new session', function() {
+      test.server.setResponseSequence([
+        constants.amqpVersion,
+        new frames.OpenFrame(test.client.policy.connect.options),
+        new frames.BeginFrame({
+          remoteChannel: 1, nextOutgoingId: 0,
+          incomingWindow: 2147483647, outgoingWindow: 2147483647,
+          handleMax: 4294967295
+        }),
+        new frames.CloseFrame({
+          error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
+        })
+      ]);
+
+      return test.client.connect(test.server.address())
+        .then(function() { return test.client.createSession(); })
+        .then(function(session) {
+          expect(session.mapped).to.be.true;
+          return test.client.disconnect();
+        });
+    });
+
+    it('should fail if the client hasn\'t been connected yet', function() {
+      expect(function() {
+        return test.client.createSession();
+      }).to.throw();
+    });
   });
 
   describe('#reattach', function() {
@@ -630,6 +644,224 @@ describe('Client', function() {
         .then(function() {
           expect(receiver.state()).to.eql('detached');
         });
+    });
+  });
+
+  describe('#reconnect', function() {
+    beforeEach(function() {
+      if (!!test.server) test.server = undefined;
+      if (!!test.client) test.client = undefined;
+      test.client = new AMQPClient(TestPolicy, {
+        reconnect: { retries: 5, forever: true }
+      });
+
+      test.server = new MockServer();
+      return test.server.setup();
+    });
+
+    afterEach(function() {
+      if (!test.server) return;
+      return test.server.teardown()
+        .then(function() {
+          test.server = undefined;
+        });
+    });
+
+    it('should wait for all existing sessions to be mapped before completing', function(done) {
+      test.server.setResponseSequence([
+        constants.amqpVersion,
+        new frames.OpenFrame(test.client.policy.connect.options),
+        new frames.BeginFrame({
+          remoteChannel: 1, nextOutgoingId: 0,
+          incomingWindow: 2147483647, outgoingWindow: 2147483647,
+          handleMax: 4294967295
+        }),
+        new AttachFrameWithReceivedName(constants.linkRole.sender),
+        new frames.BeginFrame({
+          remoteChannel: 2, nextOutgoingId: 0,
+          incomingWindow: 2147483647, outgoingWindow: 2147483647,
+          handleMax: 4294967295
+        }),
+        [
+          new frames.BeginFrame({
+            remoteChannel: 3, nextOutgoingId: 0,
+            incomingWindow: 2147483647, outgoingWindow: 2147483647,
+            handleMax: 4294967295
+          }),
+          new frames.CloseFrame({
+            error: { condition: ErrorCondition.ConnectionForced, description: 'test' }
+          }),
+        ]
+      ]);
+
+      // Set up a new server to connect to on disconnect
+      test.client.once('disconnected', function() {
+        setImmediate(function() {
+          test.server.teardown();
+          test.server = new MockServer();
+          test.server.setup();
+          test.server.setResponseSequence([
+            constants.amqpVersion,
+            new frames.OpenFrame(test.client.policy.connect.options),
+            [
+              new frames.BeginFrame({
+                remoteChannel: 1, nextOutgoingId: 0,
+                incomingWindow: 2147483647, outgoingWindow: 2147483647,
+                handleMax: 4294967295
+              }),
+              new frames.BeginFrame({
+                remoteChannel: 2, nextOutgoingId: 0,
+                incomingWindow: 2147483647, outgoingWindow: 2147483647,
+                handleMax: 4294967295
+              }),
+              new frames.BeginFrame({
+                remoteChannel: 3, nextOutgoingId: 0,
+                incomingWindow: 2147483647, outgoingWindow: 2147483647,
+                handleMax: 4294967295
+              })
+            ]
+          ]);
+        });
+      });
+
+      test.client.connect(test.server.address())
+        .then(function() {
+          var clientSession;
+          var session1;
+          var session2;
+          return test.client.createReceiver('testing')
+            .then(function(link) {
+              clientSession = link.session;
+              return test.client.createSession();
+            })
+            .then(function(session) {
+              session1 = session;
+              return test.client.createSession();
+            })
+            .then(function(session) {
+              session2 = session;
+              return [clientSession, session1, session2];
+            });
+        })
+        .spread(function(clientSession, session1, session2) {
+          var mapped = { clientSession: 0, session1: 0, session2: 0 };
+
+          clientSession.once(Session.Mapped, function() {
+            mapped.clientSession++;
+          });
+
+          session1.once(Session.Mapped, function() {
+            mapped.session1++;
+          });
+
+          session2.once(Session.Mapped, function() {
+            mapped.session2++;
+          });
+
+          test.client.once('connected', function() {
+            expect(mapped.clientSession).to.equal(1);
+            expect(mapped.session1).to.equal(1);
+            expect(mapped.session2).to.equal(1);
+            done();
+          });
+        })
+        .catch(done);
+    });
+  });
+
+  describe('#registerSaslMechanism()', function() {
+    beforeEach(function() {
+      if (!!test.server) test.server = undefined;
+      if (!!test.client) test.client = undefined;
+      test.client = new AMQPClient(TestPolicy);
+      test.server = new MockServerWithSasl();
+    });
+
+    afterEach(function(done) {
+      if (test.server) {
+        test.server.teardown();
+        test.server = null;
+      }
+      if (test.client) {
+        test.client = null;
+      }
+      done();
+    });
+
+    it('should use the registered Sasl mechanism when connecting', function (done) {
+      var saslMechanism = 'TEST';
+      var expectedChallenge = 'challenge';
+      var expectedChallengeResponse = 'challenge-response';
+      var expectedSaslInitResponse = 'init';
+
+      var initOK = false;
+      var challengeOK = false;
+
+      var expectedSaslInitFrame = new frames.SaslInitFrame({
+        mechanism: saslMechanism,
+        initialResponse: expectedSaslInitResponse
+      });
+
+      var expectedSaslChallengeResponseFrame = new frames.SaslResponseFrame({
+        response: expectedChallengeResponse
+      });
+
+      var saslHandler = {
+        getInitFrame: function() {
+          return new Promise(function(resolve) {
+            initOK = true;
+            resolve({
+              mechanism: saslMechanism,
+              initialResponse: expectedSaslInitResponse
+            });
+          });
+        },
+        getResponseFrame: function(challengeFrame) {
+          return new Promise(function(resolve) {
+            challengeOK = true;
+            expect(challengeFrame[0].value.toString()).to.equal(expectedChallenge);
+            resolve({ response: expectedChallengeResponse });
+          });
+        }
+      };
+
+      test.server.setSequence([
+        constants.saslVersion,
+        expectedSaslInitFrame,
+        expectedSaslChallengeResponseFrame,
+        constants.amqpVersion,
+        new frames.OpenFrame(test.client.policy.connect.options),
+        new frames.BeginFrame({ nextOutgoingId: 1, incomingWindow: 100, outgoingWindow: 100, channel: 1})
+      ], [
+        constants.saslVersion,
+        [ true, new frames.SaslMechanismsFrame({ saslServerMechanisms: [saslMechanism] }) ],
+        new frames.SaslChallengeFrame({
+          challenge: expectedChallenge
+        }),
+        new frames.SaslOutcomeFrame({ code: constants.saslOutcomes.ok }),
+        constants.amqpVersion,
+        new frames.OpenFrame(test.client.policy.connect.options),
+
+        new frames.BeginFrame({
+          remoteChannel: 1, nextOutgoingId: 0,
+          incomingWindow: 2147483647, outgoingWindow: 2147483647,
+          handleMax: 4294967295
+        })
+      ]);
+      test.server.setup();
+
+      // need both the policy setting and the registerSaslMechanism call to work (since one could in theory register multiple sasl mechanism but only one can be used to connect)
+      test.client.policy.connect.saslMechanism = saslMechanism;
+      test.client.registerSaslMechanism(saslMechanism, saslHandler);
+
+      test.client.connect('amqp://localhost:' + test.server.port)
+        .then(function () {
+          expect(initOK).to.equal(true);
+          expect(challengeOK).to.equal(true);
+          done();
+      }).catch(function(err) {
+        done(err);
+      });
     });
   });
 });
