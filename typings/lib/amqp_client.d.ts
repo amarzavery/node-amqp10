@@ -10,6 +10,8 @@ import ReceiverLink = require("./receiver_link");
 import SenderLink = require("./sender_link");
 import _ReceiverStream = require("./streams/receiver_stream");
 import _SenderStream = require("./streams/sender_stream");
+import Session = require("./session");
+import { SaslHandler } from "./sasl/sasl_utils";
 
 /**
  * AMQPClient is the top-level class for interacting with node-amqp10.  Instantiate this class, connect, and then send/receive
@@ -44,91 +46,121 @@ import _SenderStream = require("./streams/sender_stream");
  * does a best-effort job.  See EventHubPolicy for a more complicated example, turning objects into UTF8-encoded buffers of JSON-strings.
  */
 declare class AMQPClient extends EventEmitter {
-    policy: Policy;
-    
-    static ErrorReceived: "client:errorReceived"; 
-    static ConnectionOpened: "connection:opened";
-    static ConnectionClosed: "connection:closed";
-    
-    /**
-     * Creates a new AMQPClient instance using DefaultPolicy.
-     * @constructor
-     */
-    constructor();
-    
-    /**
-     * Creates a new AMQPClient instance by overriding DefaultPolicy using given overrides.
-     *
-     * @param policyOverrides - Additional overrides for the default policy
-     * @constructor
-     */
-    constructor(policyOverrides?: Policy.Overrides);
-    
-    /**
-     * Creates a new AMQPClient instance.
-     *
-     * @param policy - Policy to use for connection, sessions, links, etc.  Defaults to DefaultPolicy.
-     * @param [policyOverrides] - Additional overrides for the provided policy
-     * @constructor
-     */
-    constructor(policy: Policy, policyOverrides?: Policy.Overrides);
-    
-    /**
-     * Connects to a given AMQP server endpoint. Sets the default queue, so e.g.
-     * amqp://my-activemq-host/my-queue-name would set the default queue to
-     * my-queue-name for future send/receive calls.
-     * 
-     * @param url - URI to connect to, right now only supports `amqp` and `amqps` as protocol.
-     */
-    connect(url: string): Promise<this>;
-    
-    /**
-     * Creates a sender link for the given address, with optional link policy.
-     *
-     * @param address                An address to connect this link to. If not provided will use default queue from connection uri.
-     * @param [policyOverrides]      Policy overrides used for creating this sender link
-     * @param [policyOverrides.name] Explicitly set a name for this link, this is an alias to [policyOverrides.attach.name]
-     */
-    createSender(address: string, policyOverrides?: Policy.SenderLink): Promise<SenderLink>;
-    
-    /**
-     * Creates a sender link wrapped as a Writable stream.
-     *
-     * @param {String} address                Address used for link creation
-     * @param {Object} [policyOverrides]      Policy overrides used for creating this sender link
-     */
-    createSenderStream(address: string, policyOverrides?: Policy.SenderLink): Promise<_SenderStream>;
-    
-    
-    /**
-     * Creates a receiver link for the given address, with optional link policy. The
-     * promise returned resolves to a link that is an EventEmitter, which can be
-     * used to listen for 'message' events.
-     *
-     * @param {String} address                An address to connect this link to.  If not provided will use default queue from connection uri.
-     * @param {Object} [policyOverrides]      Policy overrides used for creating this receiver link
-     * @param {String} [policyOverrides.name] Explicitly set a name for this link, this is an alias to [policyOverrides.attach.name]
-     */
-    createReceiver(address: string, policyOverrides?: Policy.ReceiverLink): Promise<ReceiverLink>;
-    
-    /**
-     * Creates a receiver link wrapped as a Readable stream
-     *
-     * @param {String} address                Address used for link creation
-     * @param {Object} [policyOverrides]      Policy overrides used for creating the receiver link
-     */
-    createReceiverStream(address: string, policyOverrides?: Policy.ReceiverLink): Promise<_ReceiverStream>;
-    
-    /**
-     * Disconnect tears down any existing connection with appropriate Close
-     * performatives and TCP socket teardowns.
-     */
-    disconnect(): Promise<void>;
+  policy: Policy;
+
+  static ErrorReceived: "client:errorReceived";
+  static ConnectionOpened: "connection:opened";
+  static ConnectionClosed: "connection:closed";
+
+  /**
+   * Creates a new AMQPClient instance using DefaultPolicy.
+   * @constructor
+   */
+  constructor();
+
+  /**
+   * Creates a new AMQPClient instance by overriding DefaultPolicy using given overrides.
+   *
+   * @param policyOverrides - Additional overrides for the default policy
+   * @constructor
+   */
+  constructor(policyOverrides?: Policy.Overrides);
+
+  /**
+   * Creates a new AMQPClient instance.
+   *
+   * @param policy - Policy to use for connection, sessions, links, etc.  Defaults to DefaultPolicy.
+   * @param [policyOverrides] - Additional overrides for the provided policy
+   * @constructor
+   */
+  constructor(policy: Policy, policyOverrides?: Policy.Overrides);
+
+  /**
+   * Connects to a given AMQP server endpoint. Sets the default queue, so e.g.
+   * amqp://my-activemq-host/my-queue-name would set the default queue to
+   * my-queue-name for future send/receive calls.
+   * 
+   * @param url - URI to connect to, right now only supports `amqp` and `amqps` as protocol.
+   * @param [policyOverrides] - Additional overrides for the provided policy
+   */
+  connect(url: string, policyOverrides?: Policy.Overrides): Promise<this>;
+
+  /**
+   * Creates a session for the current connection that can be associated with any
+   * new links on that connection
+   *
+   * @inner @memberof AMQPClient
+   * @param [policyOverrides] - Additional overrides for the provided policy
+   * @return {Promise<Session>}
+   */
+  createSession(policyOverrides?: Policy.Overrides): Promise<Session>;
+
+  /**
+   * Creates a sender link for the given address, with optional link policy.
+   *
+   * @param {String} address                An address to connect this link to. If not provided will use default queue from connection uri.
+   * @param {Object} [policyOverrides]      Policy overrides used for creating this sender link
+   * @param {String} [policyOverrides.name] Explicitly set a name for this link, this is an alias to [policyOverrides.attach.name]
+   * @param {Object} [session]              A session for the current connection that can be associated with any
+   *                                        new links on that connection
+   */
+  createSender(address: string, policyOverrides?: Policy.SenderLink, session?: Session): Promise<SenderLink>;
+
+  /**
+   * Creates a sender link wrapped as a Writable stream.
+   *
+   * @param {String} address                Address used for link creation
+   * @param {Object} [policyOverrides]      Policy overrides used for creating this sender link
+   * @param {Object} [session]              A session for the current connection that can be associated with any
+   *                                        new links on that connection
+   */
+  createSenderStream(address: string, policyOverrides?: Policy.SenderLink, session?: Session): Promise<_SenderStream>;
+
+
+  /**
+   * Creates a receiver link for the given address, with optional link policy. The
+   * promise returned resolves to a link that is an EventEmitter, which can be
+   * used to listen for 'message' events.
+   *
+   * @param {String} address                An address to connect this link to.  If not provided will use default queue from connection uri.
+   * @param {Object} [policyOverrides]      Policy overrides used for creating this receiver link
+   * @param {String} [policyOverrides.name] Explicitly set a name for this link, this is an alias to [policyOverrides.attach.name]
+   * @param {Object} [session]              A session for the current connection that can be associated with any
+   *                                        new links on that connection
+   */
+  createReceiver(address: string, policyOverrides?: Policy.ReceiverLink, session?: Session): Promise<ReceiverLink>;
+
+  /**
+   * Creates a receiver link wrapped as a Readable stream
+   *
+   * @param {String} address                Address used for link creation
+   * @param {Object} [policyOverrides]      Policy overrides used for creating the receiver link
+   * @param {Object} [session]              A session for the current connection that can be associated with any
+   *                                        new links on that connection
+   */
+  createReceiverStream(address: string, policyOverrides?: Policy.ReceiverLink, session?: Session): Promise<_ReceiverStream>;
+
+  /**
+   * Disconnect tears down any existing connection with appropriate Close
+   * performatives and TCP socket teardowns.
+   */
+  disconnect(): Promise<void>;
+  
+  /**
+   * Registers a new SASL mechanism to handle SASL challenges during authentication. This method is only used to register the SASL mechanism
+   * handler and the type of SASL mechanism used will still need to be specified in the `connect` section of the policy object.
+   *
+   * @param {string}      mechanism   Name of the mechanism used to authenticate - must match what the server sends in the SASL-Mechanism frame.
+   * @param {SaslHandler} handler     Object that is going to handle SASL challenges and craft corresponding responses.
+   *                                  The handler itself needs to implement 2 methods (getInitFrameContent and getChallengeResponseContent)
+   *                                  that will be called during the SASL exchange. An example of such a SASL handler is provided in the `examples` folder.
+   */
+  registerSaslMechanism(mechanism: string, handler: SaslHandler): void;
 }
 
 declare namespace AMQPClient {
-    export type ReceiverStream = _ReceiverStream;
-    export type SenderStream = _SenderStream;
+  export type ReceiverStream = _ReceiverStream;
+  export type SenderStream = _SenderStream;
 }
 
 export = AMQPClient;
