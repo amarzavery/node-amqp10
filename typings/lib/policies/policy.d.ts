@@ -115,6 +115,14 @@ declare namespace Policy {
         senderSettleMode?: number;
         maxMessageSize?: number;
         initialDeliveryCount?: number;
+        source?: {
+            address: string;
+            filter?: object;
+        };
+        target?: {
+            address: string;
+            filter?: object;
+        }
     }
     
     export interface ReceiverLink {
@@ -133,6 +141,14 @@ declare namespace Policy {
         receiverSettleMode?: number;
         maxMessageSize?: number;
         initialDeliveryCount?: number;
+        source?: {
+            address: string;
+            filter?: object;
+        };
+        target?: {
+            address: string;
+            filter?: object;
+        }
     }
     
     export interface Address {
